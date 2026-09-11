@@ -1,0 +1,48 @@
+{
+  "name": "rcads",
+  "version": 1,
+  "carrier": "CRSF flight-mode 0x21. ELRS transports it. This file is the four-field contract.",
+  "ownership": {
+    "mode": "vehicle actual mode. Radio SA is a request only.",
+    "ready": "vehicle ODD/sensors. Radio ANDs with telemetry freshness.",
+    "risk": "vehicle 0-100. Radio never invents risk.",
+    "takeover_s": "vehicle countdown seconds. Radio never decrements."
+  },
+  "control": {
+    "tele_timeout_ms": 1500,
+    "stick_deadzone_pct": 18,
+    "phases": ["man", "asst", "l3", "blocked", "takeover", "override", "lost"],
+    "sa": "down=MAN mid=ASST up=L3",
+    "priority": "AD sensors, then FM text, then SA+RSSI if no packet yet"
+  },
+  "string": {
+    "charset": "ASCII",
+    "pattern": "MODE,READY,RISK,TAKEOVER",
+    "mode": ["MAN", "ASST", "L3"],
+    "ready": [0, 1],
+    "risk": [0, 100],
+    "takeover_s": [0, 30]
+  },
+  "edgetx_sensors": {
+    "ADmd": "mode 0..2",
+    "ADrd": "ready 0..1",
+    "ADrk": "risk 0..100",
+    "ADto": "takeover_s 0..30",
+    "FM": "CRSF flight-mode text",
+    "1RSS": "ELRS RSSI fallback ready when no payload yet"
+  },
+  "gun_radio": {
+    "wheel": "ch1",
+    "trigger": "ch2",
+    "mode_switch": "sa"
+  },
+  "vectors": [
+    { "text": "MAN,1,0,0", "mode": 0, "ready": 1, "risk": 0, "takeover_s": 0 },
+    { "text": "ASST,1,12,0", "mode": 1, "ready": 1, "risk": 12, "takeover_s": 0 },
+    { "text": "L3,1,23,5", "mode": 2, "ready": 1, "risk": 23, "takeover_s": 5 },
+    { "text": "L3,0,100,30", "mode": 2, "ready": 0, "risk": 100, "takeover_s": 30 },
+    { "text": "L3", "mode": 2, "ready": 0, "risk": 0, "takeover_s": 0 },
+    { "text": "asst,1,7,2", "mode": 1, "ready": 1, "risk": 7, "takeover_s": 2 }
+  ],
+  "reject": ["", "AUTO", "L4,1,0,0", "STAB", "ANGLE"]
+}

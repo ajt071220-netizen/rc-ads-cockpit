@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>RCADS cockpit</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font: 14px/1.4 sans-serif; background: #111; color: #ddd; margin: 24px; }
+    h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+    p { color: #9a9a9a; margin: 0 0 16px; max-width: 52em; }
+    .wrap { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+    canvas { image-rendering: pixelated; background: #0b0f0b; border: 1px solid #333; }
+    .panel { display: grid; gap: 8px; min-width: 260px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    input[type="range"] { width: 160px; }
+    code { font: 12px/1.4 ui-monospace, monospace; color: #b6e2b6; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>RCADS 控制软件</h1>
+  <p>左边是车端四个字段，SA 是枪控请求。控制软件决定 phase：正常、BLOCK、接管、手轮优先、丢链。不输出油门转向。</p>
+  <div class="wrap">
+    <canvas id="lcd" width="512" height="256"></canvas>
+    <form class="panel" id="form">
+      <div class="row">
+        <span>SA 请求</span>
+        <label><input type="radio" name="req" value="0" /> MAN</label>
+        <label><input type="radio" name="req" value="1" checked /> ASST</label>
+        <label><input type="radio" name="req" value="2" /> L3</label>
+      </div>
+      <div class="row">
+        <span>车端 mode</span>
+        <label><input type="radio" name="veh" value="0" /> MAN</label>
+        <label><input type="radio" name="veh" value="1" checked /> ASST</label>
+        <label><input type="radio" name="veh" value="2" /> L3</label>
+      </div>
+      <label class="row"><input type="checkbox" id="feed" checked /> 车端在发 FM</label>
+      <label class="row"><input type="checkbox" id="lost" /> 遥测超时（丢链）</label>
+      <label class="row"><input type="checkbox" id="ready" checked /> READY</label>
+      <label class="row">RISK <input type="range" id="risk" min="0" max="100" value="0" /> <span id="riskN">0</span></label>
+      <label class="row">TOVR <input type="range" id="tovr" min="0" max="30" value="0" /> <span id="tovrN">0</span>s</label>
+      <label class="row">手轮 <input type="range" id="steer" min="-100" max="100" value="0" /> <span id="steerN">0</span></label>
+      <label class="row">扳机 <input type="range" id="thr" min="-100" max="100" value="0" /> <span id="thrN">0</span></label>
+      <div>FM <code id="fm"></code></div>
+      <div>phase <code id="phase"></code></div>
+    </form>
+  </div>
+  <script>
+    const MODE = ["MAN", "ASST", "L3"];
+    const DEAD = 18;
+    const canvas = document.getElementById("lcd");
+    const ctx = canvas.getContext("2d");
+    const S = 4;
+
+    function phaseOf(req, mode, ready, tovr, steer, thr, linked) {
+      if (!linked) return "lost";
+      if (tovr > 0) return "takeover";
+      if (mode === 2 && (Math.abs(steer) > DEAD || Math.abs(thr) > DEAD)) return "override";
+      if (req === 2 && ready === 0) return "blocked";
+      if (mode === 2) return "l3";
+      if (mode === 1) return "asst";
+      return "man";
+    }
+    function bannerOf(ph, tovr) {
+      if (ph === "takeover") return "TOVR " + tovr + "s";
+      if (ph === "override") return "WHEEL";
+      if (ph === "blocked") return "BLOCK";
+      if (ph === "lost") return "LOST";
+      return "HOLD";
+    }
+    function px(x, y, w, h, on) {
+      ctx.fillStyle = on ? "#c8dcc8" : "#0b0f0b";
+      ctx.fillRect(x * S, y * S, w * S, h * S);
+    }
+    function text(x, y, str, inv) {
+      ctx.fillStyle = inv ? "#0b0f0b" : "#c8dcc8";
+      ctx.font = "20px ui-monospace, monospace";
+      ctx.fillText(str, x * S, (y + 7) * S);
+    }
+    function bar(x, y, w, h, v) {
+      px(x, y, w, h, true);
+      px(x + 1, y + 1, w - 2, h - 2, false);
+      const inner = w - 2;
+      const mid = x + 1 + Math.floor(inner / 2);
+      px(mid, y + 1, 1, h - 2, true);
+      const n = Math.floor((inner / 2) * Math.max(-100, Math.min(100, v)) / 100);
+      if (n > 0) px(mid, y + 1, n, h - 2, true);
+      if (n < 0) px(mid + n, y + 1, -n, h - 2, true);
+    }
+    function step() {
+      const req = Number(document.querySelector("[name=req]:checked").value);
+      const veh = Number(document.querySelector("[name=veh]:checked").value);
+      const feed = document.getElementById("feed").checked;
+      const lost = document.getElementById("lost").checked;
+      const ready = document.getElementById("ready").checked ? 1 : 0;
+      const risk = Number(document.getElementById("risk").value);
+      const tovr = Number(document.getElementById("tovr").value);
+      const steer = Number(document.getElementById("steer").value);
+      const thr = Number(document.getElementById("thr").value);
+      document.getElementById("riskN").textContent = risk;
+      document.getElementById("tovrN").textContent = tovr;
+      document.getElementById("steerN").textContent = steer;
+      document.getElementById("thrN").textContent = thr;
+      const fm = MODE[veh] + "," + ready + "," + risk + "," + tovr;
+      let mode, rd, rk, to, src, linked;
+      if (lost) {
+        mode = 0; rd = 0; rk = 0; to = 0; src = "LOST"; linked = false;
+      } else if (feed) {
+        mode = veh; rd = ready; rk = risk; to = tovr; src = "FM"; linked = true;
+      } else {
+        mode = req; rd = 1; rk = 0; to = 0; src = "SA"; linked = true;
+      }
+      const ph = phaseOf(req, mode, rd, to, steer, thr, linked);
+      document.getElementById("fm").textContent = feed && !lost ? fm : "(no fm)";
+      document.getElementById("phase").textContent = ph;
+      return { req, mode, rd, rk, to, steer, thr, ph, src: feed ? "FM" : "SA" };
+    }
+    function draw() {
+      const v = step();
+      const alarm = ["takeover", "override", "lost", "blocked"].includes(v.ph);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      px(0, 0, 128, 64, false);
+      px(0, 0, 128, 10, true);
+      text(1, 2, "RCADS", true);
+      ctx.textAlign = "right";
+      text(126, 2, MODE[v.mode], true);
+      ctx.textAlign = "left";
+      text(1, 13, v.rd ? "READY" : "NOT RDY", false);
+      ctx.textAlign = "right";
+      text(126, 13, v.src, false);
+      ctx.textAlign = "left";
+      text(1, 24, "ST", false);
+      bar(16, 22, 88, 9, v.steer);
+      text(1, 36, "TH", false);
+      bar(16, 34, 88, 9, v.thr);
+      text(1, 48, "RISK " + v.rk, false);
+      ctx.textAlign = "right";
+      text(126, 48, bannerOf(v.ph, v.to), false);
+      ctx.textAlign = "left";
+      text(1, 57, alarm ? v.ph : "SA=req  wheel+trig", false);
+    }
+    document.getElementById("form").addEventListener("input", draw);
+    draw();
+  </script>
+</body>
+</html>
